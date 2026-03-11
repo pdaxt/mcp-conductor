@@ -1,0 +1,38 @@
+# MCP Gateway — Example Configuration
+# Copy to mcpgw.toml and customize for your setup.
+# Start: mcpgw mcpgw.toml
+
+[server]
+host = "127.0.0.1"
+port = 9090
+timeout_secs = 120
+# api_key = "your-secret-key"  # Uncomment to require X-API-Key on /api/*
+
+# ── Stdio Backends ────────────────────────────────────────────────────────────
+# mcpgw spawns these as child processes and communicates via stdin/stdout.
+
+[backends.search]
+transport = "stdio"
+command = "search-mcp"
+# args = ["--cache-ttl", "3600"]
+# cwd = "/path/to/working/dir"
+[backends.search.env]
+BRAVE_API_KEY = "your-brave-api-key"
+
+[backends.secrets]
+transport = "stdio"
+command = "pqvault-unified"
+
+# ── HTTP Backends ─────────────────────────────────────────────────────────────
+# mcpgw connects to these over Streamable HTTP (they must already be running).
+
+# [backends.remote]
+# transport = "http"
+# url = "http://10.0.0.5:8080/mcp"
+
+# ── Webhooks ──────────────────────────────────────────────────────────────────
+# Map incoming webhook POSTs to tool calls.
+
+# [webhooks.stripe_payment]
+# backend = "billing"
+# tool = "handle_payment"

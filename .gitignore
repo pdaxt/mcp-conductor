@@ -1,0 +1,6 @@
+target/
+/tmp/
+*.db
+*.db-shm
+*.db-wal
+mcpgw.toml
