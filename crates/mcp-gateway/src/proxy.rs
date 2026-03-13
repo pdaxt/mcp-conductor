@@ -5,7 +5,7 @@ use rmcp::{model::*, service::RequestContext, ErrorData as McpError, RoleServer,
 use crate::pool::BackendPool;
 
 /// An MCP Server that proxies all tool calls to the BackendPool.
-/// Claude Code connects to this via Streamable HTTP — it sees all tools
+/// Any MCP client connects via Streamable HTTP — it sees all tools
 /// from all backends as if they were native tools on a single MCP server.
 #[derive(Clone)]
 pub struct ProxyServer {
@@ -21,10 +21,14 @@ impl ProxyServer {
 impl ServerHandler for ProxyServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("mcpgw", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new(
+                "mcp-conductor",
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(
-                "MCP Gateway: Unified proxy to all backend MCP servers. \
-             All tools from all backends are available here."
+                "MCP Conductor: Unified gateway to all backend MCP servers. \
+             All tools from all backends are available here. \
+             Works with any MCP-compatible client."
                     .to_string(),
             )
     }

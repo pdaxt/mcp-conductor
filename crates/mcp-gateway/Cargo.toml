@@ -3,10 +3,10 @@ name = "mcp-gateway"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "HTTP gateway for MCP servers — bridge REST/webhooks to MCP tool calls"
+description = "MCP Conductor — orchestrate all your MCP servers behind one endpoint. Works with any MCP client."
 
 [[bin]]
-name = "mcpgw"
+name = "mcp-conductor"
 path = "src/main.rs"
 
 [dependencies]

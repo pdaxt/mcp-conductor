@@ -2,13 +2,13 @@
 
 ## Overview
 
-mcpgw is a Rust gateway that manages MCP backend servers and exposes them through a single HTTP endpoint. It handles two transport types:
+MCP Conductor is a Rust gateway that manages MCP backend servers and exposes them through a single HTTP endpoint. It handles two transport types:
 
 - **stdio** — spawns backends as child processes, communicates via stdin/stdout
 - **http** — connects to already-running MCP servers over Streamable HTTP
 
 ```
-AI Agent ──HTTP──▸ mcpgw (:9090)
+AI Agent ──HTTP──▸ MCP Conductor (:9090)
                     ├── /mcp     → Streamable HTTP (MCP protocol)
                     └── /api/*   → REST API (JSON)
                          │
@@ -32,7 +32,7 @@ Sets up:
 
 ### `config.rs` — Configuration (105 lines)
 
-Parses `mcpgw.toml` into typed structs:
+Parses `MCP Conductor.toml` into typed structs:
 
 ```rust
 GatewayConfig
@@ -42,8 +42,8 @@ GatewayConfig
 ```
 
 `BackendConfig` is a tagged enum:
-- `Stdio { command, args, cwd, env }` — mcpgw spawns the process
-- `Http { url }` — mcpgw connects to existing server
+- `Stdio { command, args, cwd, env }` — MCP Conductor spawns the process
+- `Http { url }` — MCP Conductor connects to existing server
 
 ### `pool.rs` — Backend Pool (221 lines)
 
@@ -76,13 +76,13 @@ LiveBackend {
 
 ### `proxy.rs` — MCP Proxy (69 lines)
 
-Implements `ServerHandler` from rmcp — this is what Claude Code talks to:
+Implements `ServerHandler` from rmcp — this is what AI agent talks to:
 
-- `get_info()` — returns server name "mcpgw" and capabilities
+- `get_info()` — returns server name "MCP Conductor" and capabilities
 - `list_tools()` — returns all tools from all backends (flat list)
 - `call_tool()` — routes to `pool.call_tool_any()`
 
-Each MCP client (Claude Code session) gets its own `ProxyServer` instance via `StreamableHttpService`, but all share the same `Arc<BackendPool>`.
+Each MCP client (AI agent session) gets its own `ProxyServer` instance via `StreamableHttpService`, but all share the same `Arc<BackendPool>`.
 
 ### `routes.rs` — REST API (159 lines)
 
@@ -106,11 +106,11 @@ Request logging — logs method, path, status code, and duration for every reque
 
 ### Why stdio management matters
 
-Most MCP gateways only proxy HTTP→HTTP. But the majority of MCP servers use **stdio** transport (they read from stdin, write to stdout). Someone needs to spawn and manage these processes. mcpgw does this natively:
+Most MCP gateways only proxy HTTP→HTTP. But the majority of MCP servers use **stdio** transport (they read from stdin, write to stdout). Someone needs to spawn and manage these processes. MCP Conductor does this natively:
 
 ```
 Other gateways:  You start 20 processes → gateway proxies to them
-mcpgw:           You write a TOML config → mcpgw starts everything
+MCP Conductor:           You write a TOML config → MCP Conductor starts everything
 ```
 
 ### Concurrent startup with isolation
@@ -147,7 +147,7 @@ The roadmap includes optional namespacing for users who need it.
 ## Future Architecture
 
 ```
-mcpgw (planned)
+MCP Conductor (planned)
 ├── /mcp          — Streamable HTTP (current)
 ├── /api/*        — REST API (current)
 ├── /ws           — WebSocket for real-time events (planned)
@@ -158,6 +158,6 @@ BackendPool (planned additions)
 ├── Health checks    — periodic ping, auto-reconnect on failure
 ├── Circuit breaker  — stop routing to failing backends
 ├── Metrics          — per-tool latency, error rate, call count
-├── Config reload    — watch mcpgw.toml, hot-add/remove backends
+├── Config reload    — watch MCP Conductor.toml, hot-add/remove backends
 └── SSE transport    — support for SSE-based MCP servers
 ```

@@ -99,9 +99,9 @@ async fn main() -> anyhow::Result<()> {
     // Start server
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("mcpgw listening on http://{addr}");
+    tracing::info!("mcp-conductor listening on http://{addr}");
     tracing::info!("");
-    tracing::info!("  MCP endpoint (Claude Code connects here):");
+    tracing::info!("  MCP endpoint (any MCP client connects here):");
     tracing::info!("    http://{addr}/mcp");
     tracing::info!("");
     tracing::info!("  REST API:");
