@@ -1,148 +1,163 @@
-# MCP Runtime Architecture
+# Architecture
 
 ## Overview
 
-MCP Runtime is a central gateway (`mcpgw`) that manages all MCP backend servers and exposes them as a single unified MCP endpoint. Claude Code connects to one HTTP URL and gets access to all tools from all backends.
+mcpgw is a Rust gateway that manages MCP backend servers and exposes them through a single HTTP endpoint. It handles two transport types:
+
+- **stdio** — spawns backends as child processes, communicates via stdin/stdout
+- **http** — connects to already-running MCP servers over Streamable HTTP
 
 ```
-Claude Code ──HTTP──> mcpgw (port 9090) ──stdio──> backend MCPs
-                      /mcp (Streamable HTTP)         ├── mega (993 tools)
-                      /api/* (REST)                   ├── dx-terminal (206 tools)
-                      /health                         ├── forge (62 tools)
-                                                      ├── mailforge (30 tools)
-                                                      ├── ... (16 more)
-                                                      └── router (6 tools)
+AI Agent ──HTTP──▸ mcpgw (:9090)
+                    ├── /mcp     → Streamable HTTP (MCP protocol)
+                    └── /api/*   → REST API (JSON)
+                         │
+                    BackendPool
+                    ├── spawn ──▸ search-mcp (stdio)
+                    ├── spawn ──▸ crm-mcp (stdio)
+                    ├── connect ▸ remote-api (http)
+                    └── spawn ──▸ secrets-mcp (stdio)
 ```
 
-## How It Works
+## Components
 
-1. **Startup**: `mcpgw` reads `mcpgw.toml`, spawns all backends concurrently (30s timeout each)
-2. **Tool Discovery**: Each backend's tools are cached in `BackendPool`
-3. **Routing**: When a tool is called, `call_tool_any()` searches all backends for the tool name and routes to the correct one
-4. **Per-session MCP**: Each Claude Code client gets its own MCP Server instance (via `StreamableHttpService`), but all share the same `Arc<BackendPool>`
+### `main.rs` — Server Entrypoint (113 lines)
 
-## Connection Details
+Sets up:
+1. **Tracing** — structured logging with env filter
+2. **BackendPool** — creates pool, connects all backends
+3. **MCP Service** — `StreamableHttpService` with `ProxyServer` handler
+4. **Axum Router** — mounts MCP at `/mcp`, REST at `/api/*`, health at `/health`
+5. **Graceful Shutdown** — Ctrl+C → cancellation token → clean exit
 
-```
-MCP endpoint:  http://127.0.0.1:9090/mcp
-REST API:      http://127.0.0.1:9090/api/*
-Health check:  http://127.0.0.1:9090/health
-```
+### `config.rs` — Configuration (105 lines)
 
-Claude Code config:
-```json
-{ "type": "http", "url": "http://localhost:9090/mcp" }
-```
+Parses `mcpgw.toml` into typed structs:
 
-## Backend Inventory (20 backends, 1,458 tools)
-
-| Backend | Tools | Type | Description |
-|---------|-------|------|-------------|
-| mega | 993 | core | Unified MCP with 835+ tools across data, API, meta, content, subprocess, ML |
-| dx-terminal | 206 | core | Agent orchestration, task management, issue tracking |
-| forge | 62 | dev | Development tooling |
-| mailforge | 30 | email | AI-native email infrastructure via SES |
-| autocad | 18 | cad | Professional CAD drawing creation and DXF export |
-| recon | 18 | security | Attack surface reconnaissance scanner |
-| stripe | 18 | payment | Stripe payment API |
-| marketing | 17 | content | Multi-platform social media posting |
-| pqvault | 14 | secrets | Quantum-proof secrets management (unified from 4 shards) |
-| bskiller-email | 10 | bskiller | Email campaigns via Resend |
-| bskiller-research | 9 | bskiller | Source finding and verification |
-| media | 9 | content | Video/audio download and processing |
-| bskiller-admin | 8 | bskiller | Admin dashboard and system health |
-| bskiller-scraper | 8 | bskiller | Newsletter scraping and story extraction |
-| bskiller-score | 7 | bskiller | BSAF v1.0 scientific BS scoring |
-| books | 7 | content | Book search and download |
-| github-crawler | 7 | dev | GitHub repository crawling |
-| bskiller-growth | 6 | bskiller | Subscriber management and Stripe checkout |
-| router | 6 | core | Task routing to find the right MCP tool |
-| bskiller-publish | 5 | bskiller | HTML analysis pages and LinkedIn posts |
-
-## Key Design Decisions
-
-### Why a Gateway (not monolith)
-
-- **Independent failure**: One crashed MCP doesn't take down others
-- **Independent deployment**: Rebuild one MCP without touching others
-- **Memory isolation**: Each backend has its own process space
-- **Hot reconnect**: `POST /api/backends/{name}/reconnect` reconnects one backend
-
-### Concurrent Connection with Timeout
-
-`connect_all()` spawns all backends concurrently with a 30s timeout per backend. One slow/hanging backend doesn't block startup. Previously this was sequential and a single hung backend (e.g., VPN) would prevent the HTTP server from starting.
-
-### PQVault Consolidation (4 → 1)
-
-Merged `pqvault-mcp` (7), `pqvault-env-mcp` (3), `pqvault-health-mcp` (3), `pqvault-proxy-mcp` (1) into a single `pqvault-unified` binary (14 tools). All 4 shared the same state (`VaultHolder` + `UsageTracker`), so merging gives better consistency and saves 3 processes.
-
-### BSKiller Stays Separate (7 MCPs)
-
-Each BSKiller MCP has its own SQLite database and domain logic (5,830 lines of tool code). Merging would require significant refactoring with minimal benefit — the gateway already presents them as a unified interface. Total overhead: ~21MB RAM for 7 tiny Rust processes.
-
-### Mega (993 tools) — Future Decomposition Target
-
-The `mega` backend is the real monolith. It should eventually be split by domain (cloudflare, google, video, etc.) into ~10 focused MCPs of 50-100 tools each. The gateway makes this transparent to clients.
-
-## Auto-Start (launchd)
-
-```
-~/Library/LaunchAgents/com.mcpruntime.mcpgw.plist
+```rust
+GatewayConfig
+├── ServerConfig { host, port, timeout_secs, api_key }
+├── HashMap<String, BackendConfig>    // stdio or http
+└── HashMap<String, WebhookConfig>    // webhook → tool mapping
 ```
 
-- **RunAtLoad**: Starts on login
-- **KeepAlive**: Restarts on crash
-- **Logs**: `~/.mcpgw/mcpgw.log`
+`BackendConfig` is a tagged enum:
+- `Stdio { command, args, cwd, env }` — mcpgw spawns the process
+- `Http { url }` — mcpgw connects to existing server
 
-```bash
-# Restart
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.mcpruntime.mcpgw.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mcpruntime.mcpgw.plist
+### `pool.rs` — Backend Pool (221 lines)
 
-# Check health
-curl http://localhost:9090/health
+The core component. Manages the lifecycle of all backends:
+
+**Connection:**
+- `connect_all()` — spawns all backends concurrently with 30s timeout each
+- `connect_one()` — spawns a single backend, runs MCP handshake, discovers tools
+- `reconnect()` — drops old connection, re-connects (hot reconnect)
+
+**Tool Routing:**
+- `call_tool_any()` — searches all backends for a tool name, routes to correct one
+- `call_tool()` — calls a tool on a specific named backend
+- `list_all_tools()` — aggregates tools from all backends
+
+**Data Structure:**
+```rust
+BackendPool {
+    configs: HashMap<String, BackendConfig>,        // static config
+    connections: DashMap<String, Arc<RwLock<LiveBackend>>>,  // live connections
+}
+
+LiveBackend {
+    client: RunningService<RoleClient, ()>,  // MCP client connection
+    tools: Vec<Tool>,                         // cached tool list
+}
 ```
 
-## Config Reference (mcpgw.toml)
+`DashMap` allows concurrent reads (tool lookups) without blocking other backends.
 
-```toml
-[server]
-host = "127.0.0.1"
-port = 9090
-timeout_secs = 120
+### `proxy.rs` — MCP Proxy (69 lines)
 
-[backends.name]
-transport = "stdio"          # or "http"
-command = "/path/to/binary"
-args = ["--flag"]
-cwd = "/optional/workdir"
-[backends.name.env]
-KEY = "value"
+Implements `ServerHandler` from rmcp — this is what Claude Code talks to:
+
+- `get_info()` — returns server name "mcpgw" and capabilities
+- `list_tools()` — returns all tools from all backends (flat list)
+- `call_tool()` — routes to `pool.call_tool_any()`
+
+Each MCP client (Claude Code session) gets its own `ProxyServer` instance via `StreamableHttpService`, but all share the same `Arc<BackendPool>`.
+
+### `routes.rs` — REST API (159 lines)
+
+REST endpoints for scripts, webhooks, and debugging:
+
+| Route | Handler | Purpose |
+|-------|---------|---------|
+| `GET /health` | `health()` | Backend status |
+| `GET /api/tools` | `list_tools()` | All tools from all backends |
+| `GET /api/backends/{name}/tools` | `list_backend_tools()` | Tools from one backend |
+| `POST /api/tools/call` | `call_tool()` | Auto-routed tool call |
+| `POST /api/backends/{name}/tools/{tool}` | `call_backend_tool()` | Direct backend call |
+| `POST /api/backends/{name}/reconnect` | `reconnect_backend()` | Hot reconnect |
+| `POST /api/webhooks/{hook}` | `webhook()` | Webhook → tool call |
+
+### `middleware.rs` — Middleware (55 lines)
+
+Request logging — logs method, path, status code, and duration for every request.
+
+## Design Decisions
+
+### Why stdio management matters
+
+Most MCP gateways only proxy HTTP→HTTP. But the majority of MCP servers use **stdio** transport (they read from stdin, write to stdout). Someone needs to spawn and manage these processes. mcpgw does this natively:
+
+```
+Other gateways:  You start 20 processes → gateway proxies to them
+mcpgw:           You write a TOML config → mcpgw starts everything
 ```
 
-## Crate Structure
+### Concurrent startup with isolation
 
-```
-mcp-runtime/
-├── Cargo.toml              # Workspace root
-├── mcpgw.toml              # Production config (20 backends)
-├── crates/
-│   └── mcp-gateway/
-│       └── src/
-│           ├── main.rs     # Server entrypoint, Axum router
-│           ├── config.rs   # TOML config parsing
-│           ├── pool.rs     # BackendPool (DashMap, connect, route)
-│           ├── proxy.rs    # MCP Streamable HTTP proxy (ServerHandler)
-│           ├── routes.rs   # REST API routes
-│           └── middleware.rs # Auth + logging middleware
-└── docs/
-    └── ARCHITECTURE.md     # This file
-```
+`connect_all()` spawns all backends simultaneously using `tokio::spawn`. Each gets a 30-second timeout. If backend A hangs, backends B through Z still connect normally. This is critical when you have 10+ backends — sequential startup with one timeout would be unusable.
+
+### Tool routing by name (no namespacing)
+
+Tools appear with their original names — `search`, `vault_get`, `create_contact`. No `backend.tool` prefixing. This means:
+- AI agents don't need to know about the gateway
+- Existing tool calls work unchanged
+- Trade-off: tool name collisions across backends aren't handled (last-write-wins)
+
+The roadmap includes optional namespacing for users who need it.
+
+### Hot reconnect
+
+`POST /api/backends/{name}/reconnect` drops the old connection and re-spawns the backend. No gateway restart needed. Useful when:
+- A backend crashes
+- You rebuild a backend binary
+- A backend gets into a bad state
 
 ## Tech Stack
 
-- **rmcp 1.1** — Official Rust MCP SDK (client + server + transport)
-- **Axum 0.8** — HTTP server
-- **DashMap 6** — Concurrent connection pool
-- **tokio** — Async runtime
-- **launchd** — macOS service management
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| [rmcp](https://github.com/anthropics/rust-mcp) | 1.1 | MCP protocol (client + server + Streamable HTTP) |
+| [axum](https://github.com/tokio-rs/axum) | 0.8 | HTTP server |
+| [tokio](https://github.com/tokio-rs/tokio) | 1.x | Async runtime |
+| [dashmap](https://github.com/xacrimon/dashmap) | 6.x | Concurrent HashMap |
+| [toml](https://github.com/toml-rs/toml) | 0.8 | Config parsing |
+| tower-http | 0.6 | CORS, timeout, tracing middleware |
+
+## Future Architecture
+
+```
+mcpgw (planned)
+├── /mcp          — Streamable HTTP (current)
+├── /api/*        — REST API (current)
+├── /ws           — WebSocket for real-time events (planned)
+├── /dashboard    — Web UI for monitoring (planned)
+└── /metrics      — Prometheus metrics (planned)
+     │
+BackendPool (planned additions)
+├── Health checks    — periodic ping, auto-reconnect on failure
+├── Circuit breaker  — stop routing to failing backends
+├── Metrics          — per-tool latency, error rate, call count
+├── Config reload    — watch mcpgw.toml, hot-add/remove backends
+└── SSE transport    — support for SSE-based MCP servers
+```

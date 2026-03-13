@@ -10,7 +10,9 @@
 
 **Connect Claude Code to one URL. Get access to 1,000+ tools from 20+ MCP backends.**
 
-[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Configuration](#configuration) · [REST API](#rest-api) · [Contributing](#contributing)
+[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Configuration](#configuration) · [REST API](#rest-api) · [Docs](docs/) · [Contributing](#contributing)
+
+<img src="demo/mcpgw-demo.gif" alt="mcpgw demo" width="700">
 
 </div>
 
@@ -234,6 +236,14 @@ cargo fmt --check
 ```
 
 PRs welcome. The codebase is 721 lines — you can read the whole thing in 10 minutes.
+
+## Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [Getting Started](docs/GETTING_STARTED.md) | Install, configure, and run in 2 minutes |
+| [Configuration](docs/CONFIGURATION.md) | Full config reference with examples |
+| [Architecture](docs/ARCHITECTURE.md) | How it works internally, design decisions |
 
 ## License
 
